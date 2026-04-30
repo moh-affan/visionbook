@@ -1,32 +1,69 @@
-name: Quarto Deploy
+name: Build VisionBook PDF
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - '**.qmd'
+      - '_quarto.yml'
+      - '.github/workflows/build-pdf.yml'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 4
 
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          echo "${{ secrets.PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
-          chmod 600 ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
-          ssh-keyscan -t rsa ${{ secrets.HOST }} >> ~/.ssh/known_hosts
+      - name: Setup Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
 
-      - name: Pull and Render
+      - name: Install LaTeX (for PDF rendering)
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.ID }}@${{ secrets.HOST }} << 'EOF'
-          cd ${{ secrets.DIR }}
-          git pull
-          quarto render --no-clean
+          sudo apt-get update
+          sudo apt-get install -y \
+            texlive-xetex \
+            texlive-latex-extra \
+            texlive-fonts-recommended
+
+      - name: Enable PDF format in _quarto.yml (if not present)
+        run: |
+          if ! grep -q "pdf:" _quarto.yml; then
+            echo "Adding PDF configuration..."
+            cat <<EOF >> _quarto.yml
+
+          pdf:
+            documentclass: book
+            toc: true
+            number-sections: true
+            fontsize: 11pt
+            geometry: margin=1in
           EOF
+          fi
+
+      - name: Render Quarto Book to PDF
+        run: quarto render --to pdf
+
+      - name: Rename output PDF
+        run: |
+          mkdir -p output
+          PDF_FILE=$(find _book -name "*.pdf" | head -n 1)
+          cp "$PDF_FILE" output/Foundations_of_Computer_Vision.pdf
+
+      - name: Upload PDF Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: visionbook-pdf
+          path: output/Foundations_of_Computer_Vision.pdf
+
+      - name: Create GitHub Release (optional)
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: visionbook-latest
+          name: VisionBook PDF
+          files: output/Foundations_of_Computer_Vision.pdf
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
